@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
 	"restapi/internal/config"
 	"restapi/internal/handler"
 	"restapi/internal/repository"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,9 +19,7 @@ import (
 )
 
 func main() {
-	if err := godotenv.Load(); err != nil {
-		log.Fatal(err)
-	}
+	godotenv.Load()
 
 	cfg := config.Load()
 
@@ -38,7 +42,28 @@ func main() {
 	router.GET("/api/tasks/:id", taskHandler.GetTask)
 	router.POST("/api/tasks", taskHandler.CreateTask)
 	router.PATCH("/api/tasks/:id", taskHandler.UpdateTask)
-	router.DELETE("api/tasks/:id", taskHandler.DeleteTask)
+	router.DELETE("/api/tasks/:id", taskHandler.DeleteTask)
 
-	router.Run(":" + cfg.Port)
+	server := &http.Server{
+		Addr:    ":" + cfg.Port,
+		Handler: router,
+	}
+
+	go func() {
+		err = server.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("server shutdown: %v", err)
+	}
 }

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"restapi/internal/model"
 
 	"github.com/jackc/pgx/v5"
@@ -16,18 +17,21 @@ func NewTaskRepository(db *pgxpool.Pool) *TaskRepository {
 	return &TaskRepository{db: db}
 }
 
-func (r *TaskRepository) GetAll(ctx context.Context) ([]model.Task, error) {
+var ErrNotFound = errors.New("task not found")
+
+func (r *TaskRepository) GetAll(ctx context.Context, limit, offset int) ([]model.Task, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, title, description, completed, created_at, updated_at
 		FROM tasks
 		ORDER BY id
-	`)
+		LIMIT $1 OFFSET $2
+	`, limit, offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var tasks []model.Task
+	tasks := make([]model.Task, 0)
 
 	for rows.Next() {
 		var task model.Task
@@ -53,6 +57,20 @@ func (r *TaskRepository) GetAll(ctx context.Context) ([]model.Task, error) {
 	return tasks, nil
 }
 
+func (r *TaskRepository) Count(ctx context.Context) (int, error) {
+	row := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM tasks
+	`)
+
+	var count int
+	err := row.Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
 func (r *TaskRepository) Create(ctx context.Context, title string, description string) (model.Task, error) {
 	var task model.Task
 
@@ -60,7 +78,14 @@ func (r *TaskRepository) Create(ctx context.Context, title string, description s
 		INSERT INTO tasks (title, description)
 		VALUES ($1, $2)
 		RETURNING id, title, description, completed, created_at, updated_at
-	`, title, description).Scan(&task.ID, &task.Title, &task.Description, &task.Completed, &task.CreatedAt, &task.UpdatedAt)
+	`, title, description).Scan(
+		&task.ID,
+		&task.Title,
+		&task.Description,
+		&task.Completed,
+		&task.CreatedAt,
+		&task.UpdatedAt,
+	)
 
 	if err != nil {
 		return model.Task{}, err
@@ -76,9 +101,20 @@ func (r *TaskRepository) GetByID(ctx context.Context, id int64) (model.Task, err
 		SELECT id, title, description, completed, created_at, updated_at
 		FROM tasks
 		WHERE id = $1
-	`, id).Scan(&task.ID, &task.Title, &task.Description, &task.Completed, &task.CreatedAt, &task.UpdatedAt)
+	`, id).Scan(
+		&task.ID,
+		&task.Title,
+		&task.Description,
+		&task.Completed,
+		&task.CreatedAt,
+		&task.UpdatedAt,
+	)
 
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.Task{}, ErrNotFound
+		}
+
 		return model.Task{}, err
 	}
 
@@ -93,7 +129,7 @@ func (r *TaskRepository) Delete(ctx context.Context, id int64) error {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return pgx.ErrNoRows
+		return ErrNotFound
 	}
 
 	return nil
@@ -126,6 +162,10 @@ func (r *TaskRepository) Update(ctx context.Context, id int64, update model.Upda
 	)
 
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.Task{}, ErrNotFound
+		}
+
 		return model.Task{}, err
 	}
 

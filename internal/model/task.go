@@ -12,7 +12,7 @@ type Task struct {
 }
 
 type UpdateTask struct {
-	Title       *string `json:"title"`
-	Description *string `json:"description"`
+	Title       *string `json:"title" binding:"omitempty,min=3,max=100"`
+	Description *string `json:"description" binding:"omitempty,max=1000"`
 	Completed   *bool   `json:"completed"`
 }

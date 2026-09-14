@@ -8,7 +8,6 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5"
 )
 
 type TaskHandler struct {
@@ -22,12 +21,30 @@ func NewTaskHandler(repo *repository.TaskRepository) *TaskHandler {
 }
 
 type createTaskRequest struct {
-	Title       string `json:"title" binding:"required"`
-	Description string `json:"description"`
+	Title       string `json:"title" binding:"required,min=3,max=100"`
+	Description string `json:"description" binding:"max=1000"`
 }
 
 func (h *TaskHandler) GetTasks(c *gin.Context) {
-	tasks, err := h.repo.GetAll(c.Request.Context())
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil || page < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid page",
+		})
+		return
+	}
+
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if err != nil || limit < 1 || limit > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid limit",
+		})
+		return
+	}
+
+	offset := (page - 1) * limit
+
+	tasks, err := h.repo.GetAll(c.Request.Context(), limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "failed to get tasks",
@@ -35,7 +52,20 @@ func (h *TaskHandler) GetTasks(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, tasks)
+	total, err := h.repo.Count(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to count tasks",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"items": tasks,
+		"page":  page,
+		"limit": limit,
+		"total": total,
+	})
 }
 
 func (h *TaskHandler) CreateTask(c *gin.Context) {
@@ -70,7 +100,7 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 
 	task, err := h.repo.GetByID(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, repository.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": "task not found",
 			})
@@ -96,7 +126,7 @@ func (h *TaskHandler) DeleteTask(c *gin.Context) {
 
 	err = h.repo.Delete(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, repository.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": "task not found",
 			})
@@ -141,13 +171,12 @@ func (h *TaskHandler) UpdateTask(c *gin.Context) {
 
 	task, err := h.repo.Update(c.Request.Context(), id, update)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, repository.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": "task not found",
 			})
 			return
 		}
-
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "failed to update task",
 		})
